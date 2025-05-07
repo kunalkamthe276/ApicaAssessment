@@ -1,0 +1,98 @@
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.2 # Use a recent stable version
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.2 # Use a recent stable version
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - "9092:9092" # For clients outside docker network (e.g. your local machine)
+      - "29092:29092" # For clients inside docker network
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1 # Confluent specific
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1 # Confluent specific
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1             # Confluent specific
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1  # Confluent specific
+      KAFKA_CREATE_TOPICS: "user-events:1:1" # topic:partitions:replicationFactor
+
+  postgres-user:
+    image: postgres:15
+    container_name: postgres-user-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: user_db
+      POSTGRES_USER: user_admin
+      POSTGRES_PASSWORD: user_password
+    volumes:
+      - postgres_user_data:/var/lib/postgresql/data
+
+  postgres-journal:
+    image: postgres:15
+    container_name: postgres-journal-db
+    ports:
+      - "5433:5432" # Host port 5433 maps to container port 5432
+    environment:
+      POSTGRES_DB: journal_db
+      POSTGRES_USER: journal_admin
+      POSTGRES_PASSWORD: journal_password
+    volumes:
+      - postgres_journal_data:/var/lib/postgresql/data
+
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: src/main/resources/Dockerfile
+    container_name: user-service-app
+    ports:
+      - "8081:8081"
+    depends_on:
+      - kafka
+      - postgres-user
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-user:5432/user_db
+      SPRING_DATASOURCE_USERNAME: user_admin
+      SPRING_DATASOURCE_PASSWORD: user_password
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092 # Use internal Kafka port
+      JWT_SECRET: YourVeryLongAndStrongAndSecureSecretKeyForHS256 # Ensure this matches app properties
+      SPRING_SQL_INIT_MODE: always # To run data.sql on startup
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update # or create for initial setup
+
+  journal-service:
+    build:
+      context: ./journal-service
+      dockerfile: src/main/resources/Dockerfile
+    container_name: journal-service-app
+    ports:
+      - "8082:8082"
+    depends_on:
+      - kafka
+      - postgres-journal
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-journal:5432/journal_db
+      SPRING_DATASOURCE_USERNAME: journal_admin
+      SPRING_DATASOURCE_PASSWORD: journal_password
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092 # Use internal Kafka port
+      JWT_SECRET: YourVeryLongAndStrongAndSecureSecretKeyForHS256 # Ensure this matches app properties
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+
+volumes:
+  postgres_user_data:
+  postgres_journal_data:
